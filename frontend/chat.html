@@ -1,0 +1,711 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>harness v0.6</title>
+  <link rel="stylesheet" href="/css/app.css">
+  <link rel="stylesheet" href="/vendor/xterm.css">
+  <style>
+    [x-cloak]{display:none!important}
+    #messages { scroll-behavior: smooth; }
+    .msg-user { display:flex; justify-content:flex-end; margin-bottom:0.5rem; }
+    .msg-user > div { max-width:80%; background:rgba(37,99,235,0.2); border:1px solid rgba(37,99,235,0.3); border-radius:0.5rem; padding:0.5rem 0.75rem; font-size:0.875rem; white-space:pre-wrap; }
+    .msg-assistant { margin-bottom:0.5rem; }
+    .msg-system { text-align:center; font-size:0.75rem; color:#64748b; margin:0.25rem 0; }
+    .msg-divider { text-align:center; font-size:0.7rem; color:#475569; margin:0.75rem 0; padding:0.25rem 0; border-top:1px solid #334155; border-bottom:1px solid #334155; letter-spacing:0.05em; }
+  </style>
+</head>
+<body class="h-screen flex flex-col overflow-hidden bg-slate-900 text-slate-100">
+
+<!-- Top bar -->
+<header x-data="topBar"
+        class="flex items-center gap-2 px-4 py-2 bg-slate-800 border-b border-slate-700 flex-shrink-0 min-h-[2.75rem]">
+  <a href="/" class="text-slate-400 hover:text-slate-200 text-sm flex-shrink-0">←</a>
+
+  <!-- Title (click to rename) -->
+  <span x-show="!editing" @click="startEdit()"
+        class="text-sm font-medium truncate flex-1 cursor-pointer hover:text-slate-300 min-w-0"
+        x-text="$store.ui.conv?.title || 'harness'"></span>
+  <input x-show="editing" x-cloak x-model="titleInput"
+         @blur="saveTitle()" @keydown.enter="saveTitle()" @keydown.escape="editing=false"
+         class="input flex-1 text-sm py-0.5 min-w-0" id="title-input">
+
+  <!-- WD badge -->
+  <span class="font-mono text-xs text-slate-500 truncate max-w-[28%] flex-shrink-0"
+        x-text="$store.ui.conv?.wd || ''" :title="$store.ui.conv?.wd || ''"></span>
+
+  <!-- Tab toggle (only when terminal enabled) -->
+  <div x-show="serverConfig.terminalEnabled" x-cloak
+       class="flex rounded overflow-hidden border border-slate-600 text-xs flex-shrink-0">
+    <button @click="$store.ui.setTab('claude')"
+      :class="$store.ui.tab==='claude' ? 'bg-blue-600 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'"
+      class="px-3 py-1 transition-colors">Claude</button>
+    <button @click="$store.ui.setTab('terminal')"
+      :class="$store.ui.tab==='terminal' ? 'bg-blue-600 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'"
+      class="px-3 py-1 transition-colors">Terminal</button>
+  </div>
+
+  <button @click="doReset()" class="text-xs text-slate-400 hover:text-slate-200 px-2 flex-shrink-0" title="Reset">↺</button>
+  <button @click="$store.ui.configOpen = !$store.ui.configOpen"
+          class="text-xs text-slate-400 hover:text-slate-200 px-2 flex-shrink-0" title="Config">⚙</button>
+  <button x-show="serverConfig.allowSudo" x-cloak @click="toggleSudo()"
+    :class="$store.ui.sudo ? 'text-orange-400' : 'text-slate-500'"
+    class="text-xs px-2 flex-shrink-0" title="Toggle sudo">🔒</button>
+</header>
+
+<!-- Main content -->
+<div class="flex flex-1 overflow-hidden">
+
+  <!-- Claude tab -->
+  <div x-data="claudePanel"
+       x-show="$store.ui.tab === 'claude'"
+       class="flex flex-col flex-1 overflow-hidden">
+
+    <!-- Messages -->
+    <div id="messages" class="flex-1 overflow-y-auto px-4 py-4"></div>
+
+    <!-- Loading indicator -->
+    <div x-show="loading" x-cloak class="px-4 pb-2">
+      <span class="text-slate-500 text-sm animate-pulse">Waiting for response…</span>
+    </div>
+
+    <!-- AskUser dialog -->
+    <div x-show="askUser" x-cloak class="mx-4 mb-2 bg-slate-800 border border-blue-700 rounded-lg p-4">
+      <p class="text-blue-400 font-medium text-sm mb-2">💬 Claude asks:</p>
+      <p class="text-slate-200 text-sm mb-3" x-text="askUser?.question"></p>
+      <template x-if="askUser?.suggestions?.length">
+        <div class="flex flex-wrap gap-2 mb-3">
+          <template x-for="s in (askUser?.suggestions||[])" :key="s">
+            <button @click="askAnswer=s"
+              :class="askAnswer===s ? 'ring-1 ring-blue-500 bg-blue-900/30' : 'bg-slate-700 hover:bg-slate-600'"
+              class="text-xs px-2 py-1 rounded text-slate-300 transition-colors" x-text="s"></button>
+          </template>
+        </div>
+      </template>
+      <div class="flex gap-2">
+        <input type="text" x-model="askAnswer" @keydown.enter="submitAsk()"
+               class="input flex-1 text-sm" placeholder="Your answer…" id="ask-input">
+        <button @click="submitAsk()" class="btn-primary text-xs">Send</button>
+      </div>
+    </div>
+
+    <!-- Permission dialog -->
+    <div x-show="permReq" x-cloak class="mx-4 mb-2 bg-slate-800 border border-amber-700 rounded-lg p-3">
+      <p class="text-amber-400 font-medium text-sm mb-1">⚠ Permission Required</p>
+      <p class="text-slate-400 text-xs mb-2 font-mono break-all" x-text="permReq?.message"></p>
+      <div class="flex gap-2 flex-wrap">
+        <button @click="allowOnce()" class="btn-primary text-xs">Allow once</button>
+        <button @click="allowAlways()" class="text-xs px-3 py-1 rounded bg-green-800 hover:bg-green-700 text-green-200 transition-colors">Allow always</button>
+        <button @click="permReq=null" class="btn-ghost text-xs">Deny</button>
+      </div>
+    </div>
+
+    <!-- Config panel -->
+    <div x-show="$store.ui.configOpen" x-cloak
+         class="mx-4 mb-2 bg-slate-800 border border-slate-600 rounded-lg p-4 space-y-3 text-sm max-h-72 overflow-y-auto">
+      <div class="flex items-center justify-between">
+        <span class="font-semibold text-slate-200">Config</span>
+        <button @click="saveConfig()" class="btn-primary text-xs">Save</button>
+      </div>
+      <div>
+        <label class="text-slate-400 text-xs block mb-1">Model</label>
+        <select x-model="cfg.model" class="input w-full text-xs">
+          <template x-for="m in models" :key="m"><option :value="m" x-text="m"></option></template>
+        </select>
+      </div>
+      <div>
+        <label class="text-slate-400 text-xs block mb-1">
+          Thinking tokens: <span x-text="cfg.maxThinkingTokens ? cfg.maxThinkingTokens : 'off'"></span>
+        </label>
+        <input type="range" x-model.number="cfg.maxThinkingTokens" min="0" max="16000" step="1000" class="w-full accent-blue-500">
+      </div>
+      <div>
+        <label class="text-slate-400 text-xs block mb-1">Custom system prompt</label>
+        <textarea x-model="cfg.customSystemPrompt" class="input w-full text-xs h-14 resize-none font-mono"
+                  placeholder="Replaces system prompt…"></textarea>
+      </div>
+      <div>
+        <label class="text-slate-400 text-xs block mb-1">Append to system prompt</label>
+        <textarea x-model="cfg.appendSystemPrompt" class="input w-full text-xs h-14 resize-none font-mono"
+                  placeholder="Appended to system prompt…"></textarea>
+      </div>
+      <div>
+        <label class="text-slate-400 text-xs block mb-1">Max turns (0=unlimited)</label>
+        <input type="number" x-model.number="cfg.maxTurns" min="0" class="input w-24 text-xs">
+      </div>
+    </div>
+
+    <!-- Input area -->
+    <div class="flex-shrink-0 border-t border-slate-700 px-4 py-3 bg-slate-800/50">
+      <div class="flex gap-2 items-stretch">
+        <textarea x-model="input"
+          @keydown="handleKeydown($event)"
+          @input="$el.style.height='auto'; $el.style.height=Math.min($el.scrollHeight,160)+'px'"
+          :disabled="loading"
+          class="input flex-1 resize-none text-sm leading-relaxed"
+          :placeholder="cfg.enterBehavior==='newline' ? 'Message Claude… (Ctrl+Enter to send)' : 'Message Claude… (Enter to send)'"
+          rows="1" id="chat-input"></textarea>
+        <button x-show="!loading" @click="send()" :disabled="!input.trim()" class="btn-primary text-sm flex-shrink-0">Send</button>
+        <button x-show="loading" x-cloak @click="abort()" class="btn-danger text-sm flex-shrink-0">Stop</button>
+      </div>
+      <!-- Control strip -->
+      <div class="flex gap-2 mt-1.5 flex-wrap">
+        <button @click="toggleEnter()"
+                class="text-xs px-2 py-1 rounded bg-slate-700 hover:bg-slate-600 text-slate-300 transition-colors"
+                x-text="cfg.enterBehavior==='send' ? '↵ Send' : '↵ Newline'"></button>
+        <button @click="toggleMd()"
+                :class="cfg.markdownEnabled ? 'bg-blue-700 text-blue-200' : 'bg-slate-700 text-slate-400'"
+                class="text-xs px-2 py-1 rounded hover:opacity-80 transition-colors">MD</button>
+        <button @click="cycleMode()"
+                class="text-xs px-2 py-1 rounded bg-slate-700 hover:bg-slate-600 text-slate-300 transition-colors"
+                x-text="modeLabel(cfg.permissionMode) + ' ▶'"></button>
+        <button @click="clearContext()" :disabled="loading"
+                class="text-xs px-2 py-1 rounded bg-slate-700 hover:bg-slate-600 text-slate-400 transition-colors disabled:opacity-40">
+          clear context
+        </button>
+        <span x-show="$store.ui.sudo" x-cloak class="text-xs text-orange-400 px-1 py-1">sudo</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Terminal tab -->
+  <div x-data="terminalPanel"
+       x-show="$store.ui.tab === 'terminal'"
+       class="flex-1 overflow-hidden flex flex-col">
+    <!-- tmux warning (shown once if tmux not available) -->
+    <div x-show="showTmuxWarn" x-cloak
+         class="bg-amber-900/40 border-b border-amber-700 px-4 py-2 text-xs text-amber-300 flex items-center justify-between flex-shrink-0">
+      <span>⚠ tmux not available — terminal sessions won't persist across reloads</span>
+      <button @click="dismissTmuxWarn()" class="text-amber-400 hover:text-amber-200 ml-4">✕</button>
+    </div>
+    <div id="terminal-container" class="flex-1 p-1"></div>
+  </div>
+
+</div>
+
+<script>
+const _v = Date.now();
+function _import(path) { return import(path + '?v=' + _v); }
+document.addEventListener('alpine:init', () => {
+
+  Alpine.store('ui', {
+    tab: 'claude',
+    configOpen: false,
+    sudo: false,
+    conv: null,
+    setTab(t) { this.tab = t; },
+    setConv(c) { this.conv = c; this.sudo = c?.settings?.sudo ?? false; },
+  });
+
+  // ── Top bar ─────────────────────────────────────────────────────────────────
+  Alpine.data('topBar', () => ({
+    editing: false,
+    titleInput: '',
+    serverConfig: {},
+
+    async init() {
+      const { api, fetchJson } = await _import('/js/api.js');
+      const { checkAuth } = await _import('/js/auth.js');
+      await checkAuth();
+      try { this.serverConfig = await fetchJson(api.serverConfig()); } catch {}
+    },
+
+    startEdit() {
+      this.titleInput = this.$store.ui.conv?.title || '';
+      this.editing = true;
+      this.$nextTick(() => document.getElementById('title-input')?.focus());
+    },
+
+    async saveTitle() {
+      this.editing = false;
+      const newTitle = this.titleInput.trim();
+      if (!newTitle || newTitle === this.$store.ui.conv?.title) return;
+      try {
+        const { Conversations } = await _import('/js/conversations.js');
+        const id = this.$store.ui.conv?.id;
+        if (!id) return;
+        await Conversations.update(id, { title: newTitle });
+        this.$store.ui.conv = { ...this.$store.ui.conv, title: newTitle };
+        document.title = newTitle;
+      } catch {}
+    },
+
+    async toggleSudo() {
+      const newSudo = !this.$store.ui.sudo;
+      this.$store.ui.sudo = newSudo;
+      try {
+        const { Conversations } = await _import('/js/conversations.js');
+        const id = this.$store.ui.conv?.id;
+        if (!id) return;
+        await Conversations.update(id, { settings: { sudo: newSudo } });
+        if (this.$store.ui.conv) {
+          this.$store.ui.conv = {
+            ...this.$store.ui.conv,
+            settings: { ...this.$store.ui.conv.settings, sudo: newSudo },
+          };
+        }
+      } catch {}
+    },
+
+    doReset() {
+      if (this.$store.ui.tab === 'claude') window.dispatchEvent(new CustomEvent('claude:reset'));
+      else window.dispatchEvent(new CustomEvent('terminal:reset'));
+    },
+  }));
+
+  // ── Claude panel ─────────────────────────────────────────────────────────────
+  Alpine.data('claudePanel', () => ({
+    input: '',
+    loading: false,
+    sessionId: null,
+    askUser: null,
+    askAnswer: '',
+    cfg: {
+      model: 'claude-sonnet-4-6',
+      maxThinkingTokens: 0,
+      customSystemPrompt: '',
+      appendSystemPrompt: '',
+      maxTurns: 0,
+      permissionMode: 'default',
+      enterBehavior: 'send',
+      markdownEnabled: true,
+    },
+    models: ['claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+    _stream: null,
+    _msgs: null,
+    _convId: null,
+    _autoTitled: false,
+    _currentBlock: null,
+    _lastMsg: '',
+    _lastToolName: null,
+    _currentTextDiv: null,
+    _currentTextBuffer: '',
+    _Convs: null,
+    _render: null,
+    _MODES: ['default', 'acceptEdits', 'plan', 'bypassPermissions'],
+    allowedTools: [],
+    permReq: null,
+    _firstMsg: '',
+    _firstResponse: '',
+
+    async init() {
+      const params = new URLSearchParams(location.search);
+      this._convId = params.get('id');
+      if (!this._convId) { location.href = '/'; return; }
+
+      const [{ api, fetchJson, encodePath }, { Conversations }, { ClaudeStream, renderText, renderToolUse, renderToolResult, renderThinking, setMdEnabled }] = await Promise.all([
+        _import('/js/api.js'),
+        _import('/js/conversations.js'),
+        _import('/js/streaming.js'),
+      ]);
+
+      await this.$nextTick();
+      this._msgs = document.getElementById('messages');
+      this._stream = new ClaudeStream();
+      this._Convs = Conversations;
+      this._api = api;
+      this._fetchJson = fetchJson;
+      this._encodePath = encodePath;
+      this._render = { renderText, renderToolUse, renderToolResult, renderThinking };
+      this._setMdEnabled = setMdEnabled;
+
+      // Load conversation
+      let conv;
+      try { conv = await Conversations.get(this._convId); }
+      catch { location.href = '/'; return; }
+
+      this.cfg = { ...this.cfg, ...conv.settings };
+      setMdEnabled(this.cfg.markdownEnabled !== false);
+      this._autoTitled = conv.title !== 'New Conversation';
+      this.sessionId = conv.sessionIds.length ? conv.sessionIds[conv.sessionIds.length - 1] : null;
+      this.$store.ui.setConv(conv);
+      document.title = conv.title || 'harness';
+
+      // Load history
+      await this._loadHistory(conv);
+
+      // Show mkdir error if redirected with one
+      const mkdirErr = params.get('mkdirError');
+      if (mkdirErr) {
+        this._appendError('Failed to create subdirectory: ' + mkdirErr + '. Opened in ' + conv.wd + ' instead.');
+        history.replaceState(null, '', '/chat.html?id=' + this._convId);
+      }
+
+      // Stream events
+      const on = (ev, fn) => window.addEventListener(ev, fn);
+      on('stream:start',       () => { this.loading = true; this.permReq = null; this._lastToolName = null; this._currentTextDiv = null; this._currentTextBuffer = ''; });
+      on('stream:session',     (e) => this._onSession(e.detail.sessionId));
+      on('stream:text',        (e) => { this._appendText(e.detail.text); if (!this._autoTitled && this._firstResponse.length < 500) this._firstResponse += e.detail.text; });
+      on('stream:thinking',    (e) => this._appendHTML(renderThinking(e.detail.text)));
+      on('stream:tool_use',    (e) => { this._lastToolName = e.detail.name; this._appendHTML(renderToolUse(e.detail.name, e.detail.input)); });
+      on('stream:tool_result', (e) => {
+        this._appendHTML(renderToolResult(e.detail.content, e.detail.isError));
+        if (e.detail.isError) {
+          const txt = typeof e.detail.content === 'string' ? e.detail.content
+            : Array.isArray(e.detail.content) ? e.detail.content.map(c => c.text ?? '').join('\n')
+            : JSON.stringify(e.detail.content);
+          if (/permission|not allowed|blocked|approval/i.test(txt)) {
+            const tools = this._lastToolName ? [this._lastToolName] : [];
+            this.permReq = { message: txt.trim().split('\n')[0], tools };
+          }
+        }
+      });
+      on('stream:ask_user',    (e) => { this.askUser = e.detail; this.askAnswer = ''; this.$nextTick(() => document.getElementById('ask-input')?.focus()); });
+      on('stream:result',      (e) => {
+        this._appendResult(e.detail);
+        if (e.detail.permissionDenials?.length) {
+          const tools = [...new Set(e.detail.permissionDenials.map(d => d.tool_name).filter(Boolean))];
+          this.permReq = { message: 'Permission denied for: ' + tools.join(', '), tools };
+        }
+        if (e.detail.subtype === 'success' && !this._autoTitled && this._firstMsg && this._firstResponse) {
+          this._doAutoTitle();
+        }
+      });
+      on('stream:error',       (e) => this._appendError(e.detail.message));
+      on('stream:aborted',     () => this._appendSystem('Aborted.'));
+      on('stream:done',        () => { this.loading = false; this._currentBlock = null; });
+      on('claude:reset',       () => this._doReset());
+    },
+
+    async send(override) {
+      const msg = override ?? this.input.trim();
+      if (!msg || this.loading) return;
+      if (!override) {
+        this.input = '';
+        const ta = document.getElementById('chat-input');
+        if (ta) ta.style.height = 'auto';
+      }
+      this._lastMsg = msg;
+      if (!this._autoTitled && !this._firstMsg) this._firstMsg = msg;
+      this._appendUser(msg);
+      const conv = this.$store.ui.conv;
+      if (conv) this._Convs.update(this._convId, { lastMessage: msg.slice(0, 100) }).catch(() => {});
+      await this._stream.send({
+        message: msg,
+        workingDirectory: conv?.wd,
+        sessionId: this.sessionId || undefined,
+        permissionMode: this.cfg.permissionMode || 'default',
+        useSudo: this.$store.ui.sudo || undefined,
+        model: this.cfg.model || undefined,
+        maxThinkingTokens: this.cfg.maxThinkingTokens || undefined,
+        customSystemPrompt: this.cfg.customSystemPrompt || undefined,
+        appendSystemPrompt: this.cfg.appendSystemPrompt || undefined,
+        maxTurns: this.cfg.maxTurns || undefined,
+        allowedTools: this.allowedTools.length ? this.allowedTools : undefined,
+        tmuxSession: conv?.tmuxSession || undefined,
+      });
+    },
+
+    async abort() { await this._stream.abort(); },
+
+    async submitAsk() {
+      const answer = this.askAnswer.trim();
+      this.askUser = null;
+      await this._stream.sendToolResult(answer);
+    },
+
+    async allowOnce() {
+      const extras = [...(this.permReq?.tools ?? [])];
+      this.permReq = null;
+      const prev = [...this.allowedTools];
+      if (extras.length) this.allowedTools = [...new Set([...prev, ...extras])];
+      await this.send(this._lastMsg);
+      if (extras.length) this.allowedTools = prev;
+    },
+
+    async allowAlways() {
+      const extras = [...(this.permReq?.tools ?? [])];
+      this.permReq = null;
+      if (extras.length) this.allowedTools = [...new Set([...this.allowedTools, ...extras])];
+      await this.send(this._lastMsg);
+    },
+
+    handleKeydown(e) {
+      if (e.key !== 'Enter') return;
+      if (this.cfg.enterBehavior === 'newline') {
+        if (e.ctrlKey || e.metaKey) { e.preventDefault(); if (!this.loading && this.input.trim()) this.send(); }
+      } else {
+        if (!e.shiftKey) { e.preventDefault(); if (!this.loading && this.input.trim()) this.send(); }
+      }
+    },
+
+    toggleEnter() {
+      this.cfg.enterBehavior = this.cfg.enterBehavior === 'send' ? 'newline' : 'send';
+      this._saveSetting({ enterBehavior: this.cfg.enterBehavior });
+    },
+
+    toggleMd() {
+      this.cfg.markdownEnabled = !this.cfg.markdownEnabled;
+      this._setMdEnabled(this.cfg.markdownEnabled);
+      this._saveSetting({ markdownEnabled: this.cfg.markdownEnabled });
+      // Re-render all existing assistant text blocks
+      this._msgs.querySelectorAll('[data-raw-text]').forEach(el => {
+        el.innerHTML = this._render.renderText(el.dataset.rawText);
+      });
+    },
+
+    cycleMode() {
+      const idx = this._MODES.indexOf(this.cfg.permissionMode);
+      this.cfg.permissionMode = this._MODES[(idx + 1) % this._MODES.length];
+      this._saveSetting({ permissionMode: this.cfg.permissionMode });
+    },
+
+    clearContext() {
+      if (this.loading) return;
+      this._appendDivider('─── context cleared ───');
+      this.sessionId = null;
+      this._currentBlock = null;
+    },
+
+    saveConfig() {
+      this._saveSetting({
+        model: this.cfg.model,
+        maxThinkingTokens: this.cfg.maxThinkingTokens,
+        customSystemPrompt: this.cfg.customSystemPrompt,
+        appendSystemPrompt: this.cfg.appendSystemPrompt,
+        maxTurns: this.cfg.maxTurns,
+      });
+      this.$store.ui.configOpen = false;
+    },
+
+    modeLabel(mode) {
+      return { default: 'default', acceptEdits: 'edits', plan: 'plan', bypassPermissions: 'bypass' }[mode] || (mode || 'default');
+    },
+
+    async _onSession(newSessionId) {
+      if (this.sessionId === newSessionId) return;
+      const conv = this.$store.ui.conv;
+      if (!conv) return;
+      const isNew = !conv.sessionIds.includes(newSessionId);
+      this.sessionId = newSessionId;
+      if (isNew) {
+        const updated = { ...conv, sessionIds: [...conv.sessionIds, newSessionId] };
+        this.$store.ui.conv = updated;
+        await this._Convs.update(this._convId, { sessionIds: updated.sessionIds }).catch(() => {});
+      }
+    },
+
+    async _loadHistory(conv) {
+      if (!conv.sessionIds.length) return;
+      const encodedPath = this._encodePath(conv.wd);
+      for (let i = 0; i < conv.sessionIds.length; i++) {
+        if (i > 0) this._appendDivider('─── context cleared ───');
+        try {
+          const hist = await this._fetchJson(this._api.conversation(encodedPath, conv.sessionIds[i]));
+          this._renderHistMsgs(hist.messages || []);
+        } catch { /* session not started or not found, skip */ }
+      }
+      this._currentBlock = null;
+      this._scroll();
+    },
+
+    _renderHistMsgs(messages) {
+      const { renderText, renderToolUse, renderToolResult, renderThinking } = this._render;
+      for (const msg of messages) {
+        if (msg.type === 'system') continue;
+        if (msg.type === 'user') {
+          const content = msg.message?.content;
+          if (!content) continue;
+          const items = Array.isArray(content) ? content : [{ type: 'text', text: content }];
+          const texts = items.filter(c => c.type === 'text');
+          if (texts.length) { this._currentBlock = null; texts.forEach(t => this._appendUser(t.text)); }
+          items.filter(c => c.type === 'tool_result').forEach(tr => {
+            this._appendHTML(renderToolResult(tr.content ?? tr.text, tr.is_error ?? false));
+          });
+        } else if (msg.type === 'assistant') {
+          const items = Array.isArray(msg.message?.content) ? msg.message.content : [];
+          if (!items.length) continue;
+          const block = document.createElement('div');
+          block.className = 'msg-assistant space-y-1';
+          for (const item of items) {
+            if (item.type === 'thinking') block.insertAdjacentHTML('beforeend', renderThinking(item.thinking || ''));
+            else if (item.type === 'text') { const d = document.createElement('div'); d.dataset.rawText = item.text || ''; d.innerHTML = renderText(item.text || ''); block.appendChild(d); }
+            else if (item.type === 'tool_use') block.insertAdjacentHTML('beforeend', renderToolUse(item.name || '', item.input ?? {}));
+          }
+          if (block.children.length) { this._msgs.appendChild(block); this._currentBlock = null; }
+        } else if (msg.type === 'result') {
+          this._appendResult({ subtype: msg.subtype, cost: msg.total_cost_usd, turns: msg.num_turns, duration: msg.duration_ms });
+        }
+      }
+    },
+
+    async _saveSetting(patch) {
+      try {
+        await this._Convs.update(this._convId, { settings: patch });
+        if (this.$store.ui.conv) {
+          this.$store.ui.conv = { ...this.$store.ui.conv, settings: { ...this.$store.ui.conv.settings, ...patch } };
+        }
+      } catch {}
+    },
+
+    _doReset() {
+      this.sessionId = null;
+      this._currentBlock = null;
+      this._currentTextDiv = null;
+      this._currentTextBuffer = '';
+      this._firstMsg = '';
+      this._firstResponse = '';
+      this._autoTitled = false;
+      this._msgs.innerHTML = '';
+      const conv = this.$store.ui.conv;
+      if (conv) {
+        const updated = { ...conv, sessionIds: [] };
+        this.$store.ui.conv = updated;
+        this._Convs.update(this._convId, { sessionIds: [] }).catch(() => {});
+      }
+      this._appendSystem('Session reset.');
+    },
+
+    _appendUser(text) {
+      const d = document.createElement('div');
+      d.className = 'msg-user';
+      d.innerHTML = `<div>${escH(text)}</div>`;
+      this._msgs.appendChild(d);
+      this._currentBlock = null;
+      this._currentTextDiv = null;
+      this._currentTextBuffer = '';
+    },
+
+    _appendText(text) {
+      const block = this._getBlock();
+      if (!this._currentTextDiv) {
+        this._currentTextDiv = document.createElement('div');
+        this._currentTextDiv.dataset.rawText = '';
+        block.appendChild(this._currentTextDiv);
+      }
+      this._currentTextBuffer += text;
+      this._currentTextDiv.dataset.rawText = this._currentTextBuffer;
+      this._currentTextDiv.innerHTML = this._render.renderText(this._currentTextBuffer);
+      this._scroll();
+    },
+
+    _appendHTML(html) {
+      // Tool use/result breaks the current text segment; next text starts fresh
+      this._currentTextDiv = null;
+      this._currentTextBuffer = '';
+      const block = this._getBlock();
+      block.insertAdjacentHTML('beforeend', html);
+      this._scroll();
+    },
+
+    _appendResult(detail) {
+      if (detail.subtype !== 'success') return;
+      const parts = [];
+      if (detail.turns) parts.push(detail.turns + ' turn' + (detail.turns !== 1 ? 's' : ''));
+      if (detail.cost) parts.push('$' + detail.cost.toFixed(4));
+      if (detail.duration) parts.push(detail.duration + 'ms');
+      if (!parts.length) return;
+      const d = document.createElement('div');
+      d.className = 'text-xs text-slate-500 text-right mt-1';
+      d.textContent = parts.join(' · ');
+      this._msgs.appendChild(d);
+      this._currentBlock = null;
+      this._scroll();
+    },
+
+    async _doAutoTitle() {
+      this._autoTitled = true;
+      try {
+        const res = await fetch(this._api.title(), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ firstMessage: this._firstMsg, firstResponse: this._firstResponse.slice(0, 500) }),
+        });
+        if (!res.ok) return;
+        const { title } = await res.json();
+        if (!title) return;
+        await this._Convs.update(this._convId, { title });
+        const conv = this.$store.ui.conv;
+        if (conv) this.$store.ui.conv = { ...conv, title };
+        document.title = title;
+      } catch {}
+    },
+
+    _appendError(msg) {
+      const d = document.createElement('div');
+      d.className = 'text-red-400 text-sm px-3 py-2 bg-red-900/20 rounded border border-red-800 mb-1';
+      d.textContent = 'Error: ' + msg;
+      this._msgs.appendChild(d);
+      this._currentBlock = null;
+      this._scroll();
+    },
+
+    _appendSystem(msg) {
+      const d = document.createElement('div');
+      d.className = 'msg-system';
+      d.textContent = msg;
+      this._msgs.appendChild(d);
+      this._currentBlock = null;
+    },
+
+    _appendDivider(text) {
+      const d = document.createElement('div');
+      d.className = 'msg-divider';
+      d.textContent = text;
+      this._msgs.appendChild(d);
+      this._currentBlock = null;
+    },
+
+    _getBlock() {
+      if (this._currentBlock) return this._currentBlock;
+      const d = document.createElement('div');
+      d.className = 'msg-assistant space-y-1';
+      this._msgs.appendChild(d);
+      this._currentBlock = d;
+      return d;
+    },
+
+    _scroll() {
+      this.$nextTick(() => { this._msgs.scrollTop = this._msgs.scrollHeight; });
+    },
+  }));
+
+  // ── Terminal panel ────────────────────────────────────────────────────────────
+  Alpine.data('terminalPanel', () => ({
+    client: null,
+    showTmuxWarn: false,
+
+    async init() {
+      this.$watch('$store.ui.tab', (val) => {
+        if (val === 'terminal') this.$nextTick(() => this._ensureClient());
+      });
+      window.addEventListener('terminal:reset', () => this.client?.reset());
+
+      // Show tmux warning once if unavailable
+      const { api, fetchJson } = await _import('/js/api.js');
+      try {
+        const cfg = await fetchJson(api.serverConfig());
+        if (cfg.terminalEnabled && !cfg.tmuxAvailable) {
+          const warned = localStorage.getItem('cc-tmux-warned');
+          if (!warned) this.showTmuxWarn = true;
+        }
+      } catch {}
+    },
+
+    dismissTmuxWarn() {
+      this.showTmuxWarn = false;
+      localStorage.setItem('cc-tmux-warned', '1');
+    },
+
+    async _ensureClient() {
+      if (this.client) { this.client.focus(); return; }
+      const conv = this.$store.ui.conv;
+      if (!conv) return;
+      const { TerminalClient } = await _import('/js/terminal.js');
+      this.client = new TerminalClient('terminal-container');
+      this.client.init(conv.wd, conv.tmuxSession);
+    },
+  }));
+
+});
+
+function escH(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+</script>
+<script defer src="/vendor/alpine.min.js"></script>
+<script src="/vendor/xterm.js"></script>
+<script src="/vendor/addon-fit.js"></script>
+</body>
+</html>

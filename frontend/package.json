@@ -1,0 +1,14 @@
+{
+  "name": "frontend",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "css": "tailwindcss -i css/src.css -o css/app.css",
+    "css:watch": "tailwindcss -i css/src.css -o css/app.css --watch"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "^4.2.2",
+    "tailwindcss": "^4.2.2"
+  }
+}

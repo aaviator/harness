@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>sign in — harness</title>
+  <link rel="stylesheet" href="/css/app.css">
+  <style>[x-cloak]{display:none!important}</style>
+</head>
+<body class="min-h-screen bg-slate-900 flex items-center justify-center">
+  <div x-data="loginPage" class="w-full max-w-sm">
+    <div class="bg-slate-800 border border-slate-700 rounded-xl p-8">
+      <h1 class="text-2xl font-bold text-center mb-6">harness</h1>
+      <form @submit.prevent="submit()">
+        <label class="block text-sm text-slate-400 mb-1">Username</label>
+        <input type="text" x-model="username" class="input w-full mb-3" autofocus placeholder="Username" autocomplete="username">
+        <label class="block text-sm text-slate-400 mb-1">Password</label>
+        <input type="password" x-model="password" class="input w-full mb-4" placeholder="Password" autocomplete="current-password">
+        <p x-show="error" x-text="error" class="text-red-400 text-sm mb-3" x-cloak></p>
+        <button type="submit" class="btn-primary w-full" :disabled="loading">
+          <span x-text="loading ? 'Signing in…' : 'Sign in'"></span>
+        </button>
+      </form>
+    </div>
+  </div>
+
+<script>
+const _v = Date.now();
+function _import(path) { return import(path + '?v=' + _v); }
+document.addEventListener('alpine:init', () => {
+  Alpine.data('loginPage', () => ({
+    username: '', password: '', error: '', loading: false,
+    async submit() {
+      this.error = ''; this.loading = true;
+      try {
+        const { login } = await _import('/js/auth.js');
+        await login(this.username, this.password);
+        window.location.href = '/';
+      } catch(e) {
+        this.error = e.message;
+      } finally { this.loading = false; }
+    }
+  }));
+});
+</script>
+<script defer src="/vendor/alpine.min.js"></script>
+</body>
+</html>

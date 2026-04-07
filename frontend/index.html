@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>harness v0.6</title>
+  <link rel="stylesheet" href="/css/app.css">
+  <style>[x-cloak]{display:none!important}</style>
+</head>
+<body class="min-h-screen bg-slate-900 text-slate-100">
+
+<div x-data="home" class="max-w-2xl mx-auto p-6">
+  <div class="flex items-center justify-between mb-6">
+    <h1 class="text-xl font-bold">harness <span class="text-xs text-slate-500 font-normal">v0.6</span></h1>
+    <div class="flex gap-2 items-center">
+      <button @click="showNewModal()" class="btn-primary text-sm">+ New</button>
+      <button @click="doLogout()" class="text-xs text-slate-400 hover:text-slate-200 ml-2">Sign out</button>
+    </div>
+  </div>
+
+  <div x-show="loading" class="text-center py-12 text-slate-400">Loading…</div>
+
+  <div x-show="!loading">
+    <!-- Empty state -->
+    <div x-show="conversations.length === 0" class="text-center py-16">
+      <div class="text-5xl mb-4">💬</div>
+      <h2 class="text-lg font-semibold mb-2">No conversations yet</h2>
+      <p class="text-slate-400 text-sm mb-6">Start your first conversation with Claude</p>
+      <button @click="showNewModal()" class="btn-primary">Start a Conversation</button>
+    </div>
+
+    <!-- Conversation cards -->
+    <div class="space-y-2">
+      <template x-for="conv in visibleConvs" :key="conv.id">
+        <div @click="open(conv.id, $event)"
+             class="group relative flex flex-col gap-1 px-4 py-3 bg-slate-800 border border-slate-700 rounded-lg hover:bg-slate-700 cursor-pointer transition-colors">
+          <!-- Title + time -->
+          <div class="flex items-center justify-between gap-2 pr-5">
+            <span class="font-medium text-sm truncate" x-text="conv.title"></span>
+            <span class="text-xs text-slate-500 flex-shrink-0" x-text="timeAgo(conv.updatedAt)"></span>
+          </div>
+          <!-- WD -->
+          <span class="font-mono text-xs text-slate-400 truncate" x-text="conv.wd"></span>
+          <!-- Last message + badges -->
+          <div class="flex items-center gap-2 justify-between">
+            <span x-show="conv.lastMessage" class="text-xs text-slate-500 truncate" x-text="conv.lastMessage"></span>
+            <span x-show="!conv.lastMessage" class="text-xs text-slate-600 italic">no messages yet</span>
+            <div class="flex gap-1 flex-shrink-0">
+              <span x-show="conv.settings?.model" class="text-xs px-1.5 py-0.5 bg-slate-700 rounded text-slate-400"
+                    x-text="shortModel(conv.settings.model)"></span>
+              <span x-show="conv.settings?.permissionMode && conv.settings.permissionMode !== 'default'"
+                    class="text-xs px-1.5 py-0.5 bg-slate-700 rounded text-slate-400"
+                    x-text="modeLabel(conv.settings.permissionMode)"></span>
+              <span x-show="conv.settings?.sudo" class="text-xs px-1.5 py-0.5 bg-orange-900/50 rounded text-orange-400">sudo</span>
+              <span x-show="activeTmux.has(conv.tmuxSession)" class="text-xs px-1.5 py-0.5 bg-green-900/50 rounded text-green-400">tmux</span>
+            </div>
+          </div>
+          <!-- Delete -->
+          <button @click.stop="deleteConv(conv.id, conv.title)"
+                  class="absolute right-2 top-2 opacity-0 group-hover:opacity-100 text-slate-500 hover:text-red-400 transition p-1 text-xs">✕</button>
+        </div>
+      </template>
+      <!-- Load more -->
+      <button x-show="conversations.length > showCount" x-cloak
+              @click="showCount += pageSize"
+              class="w-full py-2 text-xs text-slate-500 hover:text-slate-300 transition-colors"
+              x-text="'Show more (' + (conversations.length - showCount) + ' remaining)'"></button>
+    </div>
+  </div>
+
+  <p x-show="error" x-text="'Error: '+error" class="text-red-400 text-sm mt-4" x-cloak></p>
+
+  <!-- Tmux sessions panel -->
+  <div class="mt-8 border-t border-slate-700 pt-4">
+    <div class="flex items-center justify-between mb-2">
+      <button @click="tmuxOpen = !tmuxOpen; if(tmuxOpen && !tmuxSessions.length) loadTmux()"
+              class="text-xs text-slate-500 hover:text-slate-300 flex items-center gap-1">
+        <span x-text="tmuxOpen ? '▾' : '▸'"></span> Tmux Sessions
+      </button>
+      <button x-show="tmuxOpen" x-cloak @click="cleanupTmux()"
+              class="text-xs text-slate-500 hover:text-red-400">Cleanup idle</button>
+    </div>
+    <div x-show="tmuxOpen" x-cloak class="space-y-1">
+      <div x-show="tmuxSessions.length === 0" class="text-xs text-slate-600 py-2">No active sessions</div>
+      <template x-for="s in tmuxSessions" :key="s.name">
+        <div class="flex items-center justify-between px-3 py-2 bg-slate-800 border border-slate-700 rounded text-xs gap-2">
+          <div class="flex-1 min-w-0">
+            <span class="font-mono text-slate-300" x-text="s.name"></span>
+            <span x-show="s.attached" class="text-green-400 ml-1">attached</span>
+            <template x-if="s.convTitle">
+              <a :href="'/chat.html?id=' + s.convId" class="text-blue-400 hover:text-blue-300 ml-2 truncate" x-text="s.convTitle"></a>
+            </template>
+            <span x-show="!s.convId" class="text-amber-500 ml-2">orphaned</span>
+            <span class="text-slate-600 ml-2" x-text="'idle ' + idleAgo(s.lastActivity)"></span>
+          </div>
+          <button @click="killTmux(s.name)" class="text-slate-500 hover:text-red-400 flex-shrink-0">kill</button>
+        </div>
+      </template>
+    </div>
+  </div>
+</div>
+
+<!-- New Conversation Modal -->
+<div x-data="newConvModal"
+     x-show="open" x-cloak
+     class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4"
+     @keydown.escape.window="if(open) close()">
+  <div class="bg-slate-800 border border-slate-700 rounded-xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto shadow-2xl" @click.stop>
+    <div class="flex items-center justify-between mb-5">
+      <h2 class="text-lg font-semibold">New Conversation</h2>
+      <button @click="close()" class="text-slate-400 hover:text-slate-200 text-lg leading-none">✕</button>
+    </div>
+
+    <!-- Path input -->
+    <div class="mb-3">
+      <label class="text-xs text-slate-400 block mb-1">Working Directory *</label>
+      <input type="text" x-model="wd" class="input w-full text-sm font-mono" placeholder="/path/to/project" id="wd-input">
+    </div>
+
+    <!-- Folder browser -->
+    <div class="mb-3">
+      <div class="flex items-center justify-between mb-1">
+        <label class="text-xs text-slate-400">Browse</label>
+        <button @click="resetBrowser()" class="text-xs text-slate-500 hover:text-slate-300">Reset</button>
+      </div>
+      <div class="bg-slate-900 border border-slate-700 rounded-lg p-2 max-h-36 overflow-y-auto" id="modal-folder-browser"></div>
+    </div>
+
+    <!-- New subdirectory -->
+    <div class="mb-4">
+      <label class="text-xs text-slate-400 block mb-1">Create subdirectory (optional)</label>
+      <input type="text" x-model="newSubdir" class="input w-full text-sm font-mono" placeholder="my-project">
+    </div>
+
+    <!-- Optional title -->
+    <div class="mb-3">
+      <label class="text-xs text-slate-400 block mb-1">Title (optional)</label>
+      <input type="text" x-model="title" class="input w-full text-sm" placeholder="Auto-generated from first response">
+    </div>
+
+    <!-- Model -->
+    <div class="mb-3">
+      <label class="text-xs text-slate-400 block mb-1">Model</label>
+      <select x-model="settings.model" class="input w-full text-sm">
+        <template x-for="m in models" :key="m"><option :value="m" x-text="m"></option></template>
+      </select>
+    </div>
+
+    <!-- Permission mode -->
+    <div class="mb-4">
+      <label class="text-xs text-slate-400 block mb-1">Permission Mode</label>
+      <select x-model="settings.permissionMode" class="input w-full text-sm">
+        <option value="default">Default</option>
+        <option value="acceptEdits">Accept Edits</option>
+        <option value="plan">Plan</option>
+        <option value="bypassPermissions">⚠ Bypass Permissions</option>
+      </select>
+    </div>
+
+    <!-- Sudo + Enter row -->
+    <div class="flex gap-5 mb-5">
+      <label x-show="allowSudo" class="flex items-center gap-2 cursor-pointer text-sm" x-cloak>
+        <input type="checkbox" x-model="settings.sudo" class="accent-orange-500">
+        <span class="text-slate-300">Sudo</span>
+      </label>
+      <label class="flex items-center gap-2 cursor-pointer text-sm">
+        <input type="checkbox"
+               :checked="settings.enterBehavior === 'newline'"
+               @change="settings.enterBehavior = $el.checked ? 'newline' : 'send'"
+               class="accent-blue-500">
+        <span class="text-slate-300">Enter = Newline</span>
+      </label>
+      <label class="flex items-center gap-2 cursor-pointer text-sm">
+        <input type="checkbox" x-model="settings.markdownEnabled" class="accent-blue-500">
+        <span class="text-slate-300">Markdown</span>
+      </label>
+    </div>
+
+    <div class="flex gap-2 justify-end">
+      <button @click="close()" class="btn-ghost text-sm">Cancel</button>
+      <button @click="create()" :disabled="!wd.trim() || creating" class="btn-primary text-sm">
+        <span x-show="!creating">Create</span>
+        <span x-show="creating" x-cloak>Creating…</span>
+      </button>
+    </div>
+
+    <p x-show="createError" x-text="createError" class="text-red-400 text-xs mt-2" x-cloak></p>
+  </div>
+</div>
+
+<script>
+const _v = Date.now();
+function _import(path) { return import(path + '?v=' + _v); }
+document.addEventListener('alpine:init', () => {
+
+  Alpine.data('home', () => ({
+    conversations: [],
+    loading: true,
+    error: '',
+    tmuxOpen: false,
+    tmuxSessions: [],
+    activeTmux: new Set(),
+    showCount: 10,
+    pageSize: 10,
+
+    get visibleConvs() { return this.conversations.slice(0, this.showCount); },
+
+    async init() {
+      this.loading = true;
+      try {
+        const [{ checkAuth }, { Conversations }, { api, fetchJson }] = await Promise.all([
+          _import('/js/auth.js'),
+          _import('/js/conversations.js'),
+          _import('/js/api.js'),
+        ]);
+        const [_, convs] = await Promise.all([
+          checkAuth(),
+          Conversations.list(),
+        ]);
+        this.conversations = convs;
+        // Load config for pageSize
+        try {
+          const cfg = await fetchJson(api.serverConfig());
+          if (cfg.convPageSize) { this.pageSize = cfg.convPageSize; this.showCount = cfg.convPageSize; }
+        } catch {}
+        // Load active tmux sessions + cleanup in background
+        fetch('/api/tmux/cleanup', { method: 'POST' }).catch(() => {});
+        try {
+          const sessions = await fetchJson(api.tmux());
+          this.activeTmux = new Set(sessions.map(s => s.name));
+        } catch {}
+      } catch(e) { this.error = e.message; }
+      this.loading = false;
+    },
+
+    async load() {
+      this.loading = true;
+      try {
+        const { Conversations } = await _import('/js/conversations.js');
+        this.conversations = await Conversations.list();
+      } catch(e) { this.error = e.message; }
+      this.loading = false;
+    },
+
+    open(id, event) {
+      const url = '/chat.html?id=' + id;
+      if (event?.ctrlKey || event?.metaKey) { window.open(url, '_blank'); }
+      else { window.location.href = url; }
+    },
+
+    showNewModal() { window.dispatchEvent(new CustomEvent('modal:open')); },
+
+    async deleteConv(id, title) {
+      if (!confirm(`Delete "${title}"?`)) return;
+      try {
+        const { Conversations } = await _import('/js/conversations.js');
+        await Conversations.del(id);
+        this.conversations = this.conversations.filter(c => c.id !== id);
+      } catch(e) { alert('Delete failed: ' + e.message); }
+    },
+
+    async doLogout() {
+      const { logout } = await _import('/js/auth.js');
+      logout();
+    },
+
+    async loadTmux() {
+      try {
+        const { api, fetchJson } = await _import('/js/api.js');
+        this.tmuxSessions = await fetchJson(api.tmux());
+      } catch {}
+    },
+
+    async killTmux(name) {
+      if (!confirm(`Kill tmux session "${name}"?`)) return;
+      try {
+        const { api } = await _import('/js/api.js');
+        await fetch(api.tmuxSession(name), { method: 'DELETE' });
+        this.tmuxSessions = this.tmuxSessions.filter(s => s.name !== name);
+      } catch {}
+    },
+
+    async cleanupTmux() {
+      try {
+        const { api, fetchJson } = await _import('/js/api.js');
+        const result = await fetchJson(api.tmuxCleanup(), { method: 'POST' });
+        alert(`Cleaned up ${result.orphans} orphaned, ${result.idle} idle sessions`);
+        await this.loadTmux();
+      } catch {}
+    },
+
+    idleAgo(unixSec) {
+      const s = Math.floor(Date.now() / 1000) - unixSec;
+      if (s < 60) return 'just now';
+      if (s < 3600) return Math.floor(s / 60) + 'm';
+      if (s < 86400) return Math.floor(s / 3600) + 'h';
+      return Math.floor(s / 86400) + 'd';
+    },
+
+    timeAgo(ts) {
+      const s = Math.floor((Date.now() - ts) / 1000);
+      if (s < 60) return 'just now';
+      if (s < 3600) return Math.floor(s / 60) + 'm ago';
+      if (s < 86400) return Math.floor(s / 3600) + 'h ago';
+      return Math.floor(s / 86400) + 'd ago';
+    },
+
+    shortModel(m) {
+      return (m || '').replace('claude-', '').replace(/-4-[0-9].*/, '');
+    },
+
+    modeLabel(mode) {
+      return { acceptEdits: 'edits', plan: 'plan', bypassPermissions: 'bypass' }[mode] || mode;
+    },
+  }));
+
+  Alpine.data('newConvModal', () => ({
+    open: false,
+    wd: '',
+    newSubdir: '',
+    title: '',
+    settings: {
+      sudo: false,
+      permissionMode: 'default',
+      enterBehavior: 'send',
+      model: 'claude-sonnet-4-6',
+      maxThinkingTokens: 0,
+      customSystemPrompt: '',
+      appendSystemPrompt: '',
+      maxTurns: 0,
+      markdownEnabled: true,
+    },
+    models: ['claude-sonnet-4-6', 'claude-opus-4-6', 'claude-haiku-4-5-20251001'],
+    allowSudo: false,
+    creating: false,
+    createError: '',
+    picker: null,
+    defaultDir: '/',
+
+    async init() {
+      window.addEventListener('modal:open', async () => {
+        const { api, fetchJson } = await _import('/js/api.js');
+        let cfg = {};
+        try { cfg = await fetchJson(api.serverConfig()); } catch {}
+        this.allowSudo = !!cfg.allowSudo;
+        this.defaultDir = cfg.defaultDir || '/';
+        if (cfg.models?.length) this.models = cfg.models;
+        if (cfg.defaultModel) this.settings.model = cfg.defaultModel;
+        this.wd = this.defaultDir;
+        this.title = '';
+        this.newSubdir = '';
+        this.createError = '';
+        this.settings.sudo = false;
+        this.open = true;
+        await this.$nextTick();
+        if (!this.picker) {
+          const { FolderPicker } = await _import('/js/folder-picker.js');
+          this.picker = new FolderPicker('modal-folder-browser', (path) => {
+            this.wd = path;
+            this.$nextTick(() => {
+              const el = document.getElementById('wd-input');
+              if (el) { el.scrollLeft = el.scrollWidth; }
+            });
+          });
+        }
+        this.picker.init(this.defaultDir);
+      });
+    },
+
+    close() { this.open = false; },
+
+    resetBrowser() { this.picker?.init(this.defaultDir); },
+
+    async create() {
+      if (!this.wd.trim() || this.creating) return;
+      this.creating = true;
+      this.createError = '';
+      let finalWd = this.wd.trim();
+      let mkdirError = '';
+
+      // Try creating subdirectory if specified
+      const subdir = this.newSubdir.trim();
+      if (subdir) {
+        if (/[/\\:*?"<>|]/.test(subdir)) {
+          this.createError = 'Invalid subdirectory name';
+          this.creating = false;
+          return;
+        }
+        const subdirPath = finalWd.replace(/\/$/, '') + '/' + subdir;
+        try {
+          const { api } = await _import('/js/api.js');
+          const res = await fetch(api.fsMkdir(), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: subdirPath }),
+          });
+          const data = await res.json();
+          if (res.ok && data.ok) {
+            finalWd = subdirPath;
+          } else {
+            mkdirError = data.error || 'Failed to create subdirectory';
+          }
+        } catch(e) {
+          mkdirError = e.message || 'Failed to create subdirectory';
+        }
+      }
+
+      try {
+        const { Conversations } = await _import('/js/conversations.js');
+        const conv = await Conversations.create({
+          wd: finalWd,
+          title: this.title.trim() || undefined,
+          settings: { ...this.settings },
+        });
+        this.open = false;
+        const errorParam = mkdirError ? '&mkdirError=' + encodeURIComponent(mkdirError) : '';
+        window.location.href = '/chat.html?id=' + conv.id + errorParam;
+      } catch(e) {
+        this.createError = e.message;
+        this.creating = false;
+      }
+    },
+  }));
+
+});
+</script>
+<script defer src="/vendor/alpine.min.js"></script>
+</body>
+</html>
