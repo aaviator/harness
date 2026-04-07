@@ -1,0 +1,23 @@
+node_modules/
+dist/
+*.log
+
+# Config contains secrets (password hash, auth secret)
+config.json
+
+# Claude Code settings
+.claude/
+!.claude/settings.json
+
+# Build artifacts
+backend/dist/
+frontend/css/app.css
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temp
+/tmp/
+*.swp
+*.swo

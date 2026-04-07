@@ -1,0 +1,22 @@
+[Unit]
+Description=aaviator/harness v0.6
+After=network.target
+
+[Service]
+Type=simple
+User=aavi
+WorkingDirectory=/path/to/harness/backend
+ExecStart=/path/to/harness/backend/node_modules/.bin/tsx cli/node.ts
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=claude-webui
+
+# Environment
+Environment=HOME=/home/aavi
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=multi-user.target

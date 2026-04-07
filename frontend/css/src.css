@@ -1,0 +1,44 @@
+@import "tailwindcss";
+
+@source "../index.html";
+@source "../chat.html";
+@source "../login.html";
+@source "../js/**/*.js";
+
+@layer base {
+  body { @apply bg-slate-900 text-slate-100; }
+  details summary::-webkit-details-marker { display: none; }
+}
+
+@layer components {
+  .btn-primary { @apply px-3 py-1.5 rounded text-sm font-medium transition-colors bg-blue-600 hover:bg-blue-500 text-white; }
+  .btn-ghost { @apply px-3 py-1.5 rounded text-sm font-medium transition-colors bg-transparent hover:bg-slate-700 text-slate-300 hover:text-white; }
+  .btn-danger { @apply px-3 py-1.5 rounded text-sm font-medium transition-colors bg-red-700 hover:bg-red-600 text-white; }
+  .input { @apply bg-slate-800 border border-slate-600 rounded px-3 py-1.5 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-blue-500; }
+  .card { @apply bg-slate-800 border border-slate-700 rounded-lg; }
+}
+
+/* Prose for rendered markdown */
+.prose-invert { color: #e2e8f0; }
+.prose-invert h1,.prose-invert h2,.prose-invert h3 { color: #f1f5f9; font-weight: 600; margin: 0.75em 0 0.25em; }
+.prose-invert h1 { font-size: 1.3em; }
+.prose-invert h2 { font-size: 1.15em; }
+.prose-invert h3 { font-size: 1em; }
+.prose-invert p { margin: 0.4em 0; line-height: 1.6; }
+.prose-invert code { background: #1e293b; color: #7dd3fc; padding: 0.1em 0.3em; border-radius: 3px; font-size: 0.85em; font-family: monospace; }
+.prose-invert pre { background: #0f172a; border: 1px solid #334155; border-radius: 6px; padding: 0.75em 1em; overflow-x: auto; margin: 0.5em 0; }
+.prose-invert pre code { background: none; color: #e2e8f0; padding: 0; font-size: 0.8em; }
+.prose-invert ul { padding-left: 1.5em; margin: 0.3em 0; list-style-type: disc; }
+.prose-invert ol { padding-left: 1.5em; margin: 0.3em 0; list-style-type: decimal; }
+.prose-invert li { margin: 0.15em 0; }
+.prose-invert ul ul { list-style-type: circle; }
+.prose-invert ul ul ul { list-style-type: square; }
+.prose-invert a { color: #38bdf8; text-decoration: underline; }
+.prose-invert blockquote { border-left: 3px solid #475569; padding-left: 0.75em; color: #94a3b8; margin: 0.5em 0; }
+.prose-invert table { border-collapse: collapse; width: 100%; margin: 0.5em 0; }
+.prose-invert th,.prose-invert td { border: 1px solid #334155; padding: 0.4em 0.6em; text-align: left; }
+.prose-invert th { background: #1e293b; }
+
+/* xterm container */
+#terminal-container { height: 100%; }
+.xterm-viewport { scrollbar-width: thin; scrollbar-color: #475569 transparent; }
