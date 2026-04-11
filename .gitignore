@@ -1,0 +1,33 @@
+node_modules/
+dist/
+*.log
+
+# Config contains secrets (password hash, auth secret)
+config.json
+
+# Claude Code settings
+.claude/
+!.claude/settings.json
+
+# Build artifacts
+backend/dist/
+frontend/css/app.css
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temp
+/tmp/
+*.swp
+*.swo
+
+# Internal dev notes (contain server-specific paths/hostnames)
+PLAN.md
+PLAN-2.md
+PLAN-3.md
+PLAN-4.md
+PLAN-5.md
+AUDIT.md
+DEV-PROCESS.md
+test_scratch.txt
